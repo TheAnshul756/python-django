@@ -1,5 +1,6 @@
 import opentracing
 from opentracing.ext import tags
+from opentracing.propagation import Format
 import six
 
 
@@ -40,7 +41,7 @@ class DjangoTracing(object):
         scope = self._current_scopes.get(request, None)
         return None if scope is None else scope.span
 
-    def trace(self, *attributes):
+    def trace(self, *attributes, view=True):
         '''
         Function decorator that traces functions such as Views
         @param attributes any number of HttpRequest attributes
@@ -55,8 +56,8 @@ class DjangoTracing(object):
 
             def wrapper(request, *args, **kwargs):
                 # if tracing all already, return right away.
-                if self._trace_all:
-                    return view_func(request)
+                if self._trace_all and view:
+                    return view_func(request, *args, **kwargs)
 
                 # otherwise, apply tracing.
                 try:
@@ -96,9 +97,12 @@ class DjangoTracing(object):
         except (opentracing.InvalidCarrierException,
                 opentracing.SpanContextCorruptedException):
             scope = self.tracer.start_active_span(operation_name)
+            # Inject the scope back to the carrier for nested calls to recover it
+            self.tracer.inject(scope, Format.HTTP_HEADERS, headers)
 
-        # add span to current spans
-        self._current_scopes[request] = scope
+        # Add span to current spans
+        # use list per request, one item per nested call
+        self._current_scopes.setdefault(request, []).append(scope)
 
         # standard tags
         scope.span.set_tag(tags.COMPONENT, 'django')
@@ -119,7 +123,10 @@ class DjangoTracing(object):
         return scope
 
     def _finish_tracing(self, request, response=None, error=None):
-        scope = self._current_scopes.pop(request, None)
+        scope = self._current_scopes[request].pop()
+        # free scope dict once all items are consumed
+        if not self._current_scopes[request]:
+            del self._current_scopes[request]
         if scope is None:
             return
 
