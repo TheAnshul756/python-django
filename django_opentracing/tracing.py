@@ -123,10 +123,13 @@ class DjangoTracing(object):
         return scope
 
     def _finish_tracing(self, request, response=None, error=None):
-        scope = self._current_scopes[request].pop()
+        if request in self._current_scopes:
+            scope = self._current_scopes.get(request).pop()
+        else:
+            scope = None
         # free scope dict once all items are consumed
-        if not self._current_scopes[request]:
-            del self._current_scopes[request]
+        if not self._current_scopes.get(request,[]):
+            self._current_scopes.pop(request,None)
         if scope is None:
             return
 
@@ -137,8 +140,11 @@ class DjangoTracing(object):
                 'error.object': error,
             })
         if response is not None:
-            scope.span.set_tag(tags.HTTP_STATUS_CODE, response.status_code)
-
+            # print("response:",response)
+            try:
+                scope.span.set_tag(tags.HTTP_STATUS_CODE, response.status_code)
+            except:
+                pass
         scope.close()
 
     def _call_start_span_cb(self, span, request):
@@ -169,3 +175,4 @@ def initialize_global_tracer(tracing):
     initialize_global_tracer.complete = True
 
 initialize_global_tracer.complete = False
+
